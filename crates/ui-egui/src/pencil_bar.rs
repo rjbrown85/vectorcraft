@@ -374,7 +374,7 @@ pub fn show(app: &mut VectorcraftApp, ctx: &egui::Context) {
             match slot {
                 Slot::Tool(id) => {
                     let Some(info) = vectorcraft_tools::tool_info(id) else { continue };
-                    if button(ui, &t, rect, Face::Icon(info.icon), &crate::toolbar::tip(info), active == id, has_doc) {
+                    if button(ui, &t, rect, Face::Icon(crate::icons::tool_icon(info.icon)), &crate::toolbar::tip(info), active == id, has_doc) {
                         crate::toolbar::remember(app, id);
                         run(app, "tool.select", json!({ "tool": id }));
                     }
