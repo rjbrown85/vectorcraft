@@ -42,6 +42,7 @@ pub mod opening;
 pub mod palette;
 mod panel_docking;
 pub mod panels;
+pub mod pencil_bar;
 pub mod picks;
 pub mod place;
 pub mod placing;
@@ -259,6 +260,10 @@ pub struct Services {
     pub inbox: Option<Inbox>,
     /// Web: trigger a browser download instead of writing a path.
     pub download: Option<DownloadFn>,
+    /// Web: where saves of the document (Save, Save As, Save a Copy, Save as Template) go instead
+    /// of [`Self::download`]: kept in the browser, so saving often doesn't download a file each
+    /// time (Download hands out a copy, [`pencil_bar`]). Without it saves download too.
+    pub keep: Option<DownloadFn>,
     /// Web: start an async open (bytes arrive via `inbox`).
     pub open_async: Option<Box<dyn FnMut()>>,
     /// Read the system clipboard's text (desktop). Without it, pasted text only arrives with
@@ -327,6 +332,10 @@ pub struct Services {
     /// and the end to switch to the Eraser tool and back. Without it, pen pressure comes from
     /// touch events only ([`stylus`]).
     pub stylus: Option<stylus::StylusFeed>,
+    /// Web: the files saved in this browser, and handing a file to the device (the share sheet on
+    /// an iPad: Save to Files, AirDrop; a download elsewhere). Without it (the desktop apps) the
+    /// Download and Saved Files commands are gray ([`pencil_bar`]).
+    pub browser_files: Option<Box<dyn pencil_bar::BrowserFiles>>,
 }
 
 /// Cached canvas raster.
@@ -531,7 +540,7 @@ pub struct VectorcraftApp {
     /// Data Recovery's timer and startup question ([`recovery`]).
     pub recovery: recovery::Timer,
     /// Modifiers the keyboard holds (from the host's input), given back after synthetic input.
-    host_modifiers: egui::Modifiers,
+    pub(crate) host_modifiers: egui::Modifiers,
     /// Synthetic input set the modifiers egui holds (see [`Self::raw_input_hook`]).
     synthetic_modifiers: bool,
     /// The marked text the system IME last sent (`None` once it commits or clears). When the Type
@@ -1513,6 +1522,12 @@ impl VectorcraftApp {
     /// modifiers egui holds (`i.modifiers`), so a synthetic key, button or wheel turn holds its own
     /// for the frames it spans (a drag's moves included); the keyboard's come back after.
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
+        self.host_input_hook(raw);
+        // After the host modifiers were read: the Pencil Bar's sticky Shift and Option join them.
+        pencil_bar::stick_modifiers(self, raw);
+    }
+
+    fn host_input_hook(&mut self, raw: &mut egui::RawInput) {
         // The native menu's key equivalents become the input their keys make, ahead of what came
         // after them (see `native_menu`).
         let keys = self.services.native_menu.as_mut().map(native_menu::NativeMenu::take_keys).unwrap_or_default();
@@ -1631,6 +1646,7 @@ impl VectorcraftApp {
             }
         });
         dock::floating_panel(self, &ctx);
+        pencil_bar::show(self, &ctx);
         floating::show(self, &ctx);
         dialogs::show(self, &ctx);
         export_progress::show(self, &ctx);

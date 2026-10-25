@@ -444,6 +444,10 @@ pub struct UiState {
     /// Workspace before Preferences › Devices › Enable Touch Workspace switched to Touch (#394).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub touch_workspace_restore: Option<String>,
+    /// The Pencil Bar over the canvas (View › Pencil Bar): where it sits, whether it shows, and its
+    /// sticky Shift and Option (`crate::pencil_bar`).
+    #[serde(default)]
+    pub pencil: crate::pencil_bar::PencilBar,
     /// User-saved workspaces (New Workspace…).
     #[serde(default)]
     pub custom_workspaces: Vec<crate::workspaces::Workspace>,
@@ -870,6 +874,7 @@ impl Default for UiState {
             shortcut_set: default_shortcut_set(),
             workspace: default_workspace(),
             touch_workspace_restore: None,
+            pencil: crate::pencil_bar::PencilBar::default(),
             custom_workspaces: vec![],
             workspace_changes: vec![],
             recent_files: vec![],

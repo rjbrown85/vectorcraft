@@ -76,6 +76,41 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "Cmd+Shift+P",
         "{path? | paths?} no file: pick files, then the Place dialog (Link, Template, Replace); paths: that dialog for them; path (or name+dataBase64, …file.place params): file.place, centred in the view (a PDF with several pages or a password and no page opens the Place PDF dialog first)",
     ),
+    (
+        "file.download",
+        "Download a Copy",
+        "",
+        "{format?: vectorcraft|svg|pdf|png} web: the active document written in that format (default vectorcraft) and handed to the device (the share sheet on an iPad: Save to Files, AirDrop; else a download), saved or not → {name, size}",
+    ),
+    ("file.savedFiles", "Saved in This Browser…", "", "{} web: show or hide the files Save kept in this browser, to open, download or delete"),
+    (
+        "file.listSaved",
+        "List Files Saved in This Browser",
+        "",
+        "{} web → [{name, size, saved}] the files Save kept in this browser, the last saved first",
+    ),
+    (
+        "file.openSaved",
+        "Open File Saved in This Browser",
+        "",
+        "{name} web: open a file Save kept in this browser (saving it again replaces it there)",
+    ),
+    ("file.downloadSaved", "Download File Saved in This Browser", "", "{name} web: hand a file Save kept in this browser to the device"),
+    ("file.deleteSaved", "Delete File Saved in This Browser", "", "{name} web: forget a file Save kept in this browser"),
+    ("view.pencilBar", "Pencil Bar", "", "{} show or hide the Pencil Bar over the canvas (it shows by itself once a pen touches the canvas) → shown"),
+    ("view.pencilBarTop", "Pencil Bar at Top", "", "{} the Pencil Bar along the top of the canvas instead of the bottom → at top"),
+    (
+        "edit.stickyShift",
+        "Sticky Shift",
+        "",
+        "{on?} hold Shift for the pen until turned off (no keyboard: constrain lines, angles and proportions) → on",
+    ),
+    (
+        "edit.stickyOption",
+        "Sticky Option",
+        "",
+        "{on?} hold Option (Alt) for the pen until turned off (no keyboard: drag a copy, draw from the center) → on",
+    ),
     ("file.openRecent1", "Open Recent File 1", "", "{}"),
     ("file.openRecent2", "Open Recent File 2", "", "{}"),
     ("file.openRecent3", "Open Recent File 3", "", "{}"),
@@ -1283,6 +1318,7 @@ pub fn run_ui_command(app: &mut VectorcraftApp, id: &str, p: &Value) -> Option<R
         .or_else(|| crate::workspaces::run_command(app, id, p))
         .or_else(|| crate::floating::command(app, id, p))
         .or_else(|| crate::edit_toolbar::command(app, id, p))
+        .or_else(|| crate::pencil_bar::command(app, id, p))
     {
         return Some(r);
     }
@@ -1974,6 +2010,9 @@ pub fn checked(app: &VectorcraftApp, id: &str, p: &Value) -> Option<bool> {
             crate::i18n::Lang::from_code(pref).is_some_and(|l| l.code().eq_ignore_ascii_case(lang))
         });
     }
+    if let Some(on) = crate::pencil_bar::checked(app, id) {
+        return Some(on);
+    }
     let v = &app.ui.view;
     // An item that can be on or off is `Some` whatever the document and selection (off with none):
     // the macOS menu bar can't change an item's kind without rebuilding.
@@ -2499,6 +2538,9 @@ pub fn enabled(app: &VectorcraftApp, id: &str) -> bool {
         // The system clipboard's contents can be pasted with an empty internal clipboard.
         return (c.enabled)(&app.session).is_ok() || app.system_paste && id.starts_with("edit.paste");
     }
+    if let Some(on) = crate::pencil_bar::enabled(app, id) {
+        return on;
+    }
     match id {
         // Save is off for a clean document that already has its own file.
         "file.save" => app.session.active().is_some_and(|d| d.path.is_none() || d.converted || d.is_dirty()),
@@ -2637,6 +2679,8 @@ pub fn menu_tree_named(english_names: bool) -> Vec<(&'static str, Vec<Item>)> {
                 c("Save as PDF…", "file.export.pdf"),
                 c("Save for Office Documents…", "document.exportForOffice"),
                 c("Revert", "file.revert"),
+                c("Download a Copy", "file.download"),
+                c("Saved in This Browser…", "file.savedFiles"),
                 Sep,
                 c("Place…", "file.place"),
                 Sep,
@@ -3126,6 +3170,11 @@ pub fn menu_tree_named(english_names: bool) -> Vec<(&'static str, Vec<Item>)> {
                 c("Hide Slices", "view.slices.hide"),
                 c("Lock Slices", "view.slices.lock"),
                 c("Hide Template", "view.template"),
+                Sep,
+                c("Pencil Bar", "view.pencilBar"),
+                c("Pencil Bar at Top", "view.pencilBarTop"),
+                c("Sticky Shift", "edit.stickyShift"),
+                c("Sticky Option", "edit.stickyOption"),
                 Sep,
                 sub(
                     "Rulers",

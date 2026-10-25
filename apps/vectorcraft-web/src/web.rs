@@ -16,6 +16,7 @@ use vectorcraft_ui_egui::print::{PrintJob, PrintService, Printer};
 use vectorcraft_ui_egui::{Services, VectorcraftApp};
 use wasm_bindgen::JsCast as _;
 
+use crate::browser_files::{Library, SharedLibrary, WebFiles};
 use crate::locks::WebLocks;
 use crate::pencil::SharedPointers;
 
@@ -53,6 +54,8 @@ struct Host {
     /// The page's Web Locks for Data Recovery, started once before the first frame: a graphics
     /// restart keeps them, so the tab stays the owner of its recovery area.
     locks: Option<WebLocks>,
+    /// The files saved in this browser, read before the first frame.
+    library: SharedLibrary,
     /// Graphics restarts so far.
     restarts: u32,
 }
@@ -67,6 +70,8 @@ pub fn start() {
     wasm_bindgen_futures::spawn_local(async move {
         // Before the first frame, which looks for copies a crash left behind.
         let locks = WebLocks::start(RECOVERY_PREFIX).await;
+        // The files saved in this browser, so the first frame can list and open them.
+        let library = Library::open().await;
         // Fallback fonts the first frame needs (Noto Sans Arabic), fetched while the loading text
         // shows; the rest load in the background once the app runs.
         crate::fonts::load_startup_fonts().await;
@@ -78,6 +83,7 @@ pub fn start() {
             pasted: Rc::default(),
             pointers: SharedPointers::default(),
             locks,
+            library,
             restarts: 0,
         };
         track_paste(&host.pasted);
@@ -116,7 +122,7 @@ async fn run(host: Host, canvas: web_sys::HtmlCanvasElement, moving: Option<Movi
                     rs.device.set_device_lost_callback(move |reason, msg| loss.report(&ctx, format!("{reason:?}: {msg}")));
                 }
                 host.pasted.borrow_mut().ctx = Some(ctx.clone());
-                let services = services(host.inbox.clone(), host.place_inbox.clone(), ctx.clone(), host.locks.clone());
+                let services = services(host.inbox.clone(), host.place_inbox.clone(), ctx.clone(), host.locks.clone(), &host.library);
                 let app = match taken.borrow_mut().take() {
                     Some(mut app) => {
                         // The old services asked the old context for frames.
@@ -413,7 +419,8 @@ impl eframe::App for WebShell {
     }
 }
 
-fn services(inbox: Inbox, place_inbox: PlaceInbox, ctx: egui::Context, locks: Option<WebLocks>) -> Services {
+fn services(inbox: Inbox, place_inbox: PlaceInbox, ctx: egui::Context, locks: Option<WebLocks>, library: &SharedLibrary) -> Services {
+    let kept = library.clone();
     let open_inbox = inbox.clone();
     let picked = place_inbox.clone();
     let place_ctx = ctx.clone();
@@ -457,8 +464,19 @@ fn services(inbox: Inbox, place_inbox: PlaceInbox, ctx: egui::Context, locks: Op
         })),
         // Sample Color from Screen: the browser's EyeDropper, where it has one.
         screen_color,
-        // A download that couldn't be started fails the save or export it is for (#1693).
-        download: Some(Box::new(|name: &str, bytes: &[u8]| download(name, bytes).inspect_err(|e| log::error!("download of {name} failed: {e}")))),
+        // An export goes to the device (the share sheet on an iPad); one that couldn't be started
+        // fails (#1693).
+        download: Some(Box::new(|path: &str, bytes: &[u8]| {
+            crate::browser_files::deliver(&fileio::file_name(path), bytes).inspect_err(|e| log::error!("download of {path} failed: {e}"))
+        })),
+        // Saves of the document stay in this browser; one that can't be kept fails.
+        keep: Some(Box::new(move |name: &str, bytes: &[u8]| {
+            if crate::api::capture(name, bytes) {
+                return Ok(());
+            }
+            kept.borrow_mut().keep(name, bytes)
+        })),
+        browser_files: Some(Box::new(WebFiles(library.clone()))),
         inbox: Some(inbox),
         recovery_store: Some(Arc::new(BrowserStore { locks })),
         // File → Print: the browser's print dialog.
@@ -554,7 +572,7 @@ impl RecoveryStore for BrowserStore {
 }
 
 /// Trigger a browser download of `bytes` named after the last component of `path`.
-fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
     if crate::api::capture(path, bytes) {
         return Ok(());
     }

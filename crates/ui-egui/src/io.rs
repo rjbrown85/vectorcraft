@@ -343,8 +343,36 @@ pub fn new_from_template(app: &mut VectorcraftApp, path: Option<String>) -> Resu
     Ok(r)
 }
 
-/// Web: download `bytes` under `path`'s file name; desktop: write them to `path`.
+thread_local! {
+    /// A save of the document is writing ([`DocumentSave`]): the web keeps it in the browser.
+    static DOCUMENT_SAVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// While alive, writes are a save of the document (Save, Save As, Save a Copy, Save as Template),
+/// which the web keeps in the browser ([`Services::keep`]) instead of downloading.
+struct DocumentSave;
+
+impl DocumentSave {
+    fn begin() -> Self {
+        DOCUMENT_SAVE.with(|s| s.set(true));
+        Self
+    }
+}
+
+impl Drop for DocumentSave {
+    fn drop(&mut self) {
+        DOCUMENT_SAVE.with(|s| s.set(false));
+    }
+}
+
+/// Web: keep a save of the document in the browser, download anything else, under `path`'s file
+/// name; desktop: write them to `path`.
 pub(crate) fn write_to(services: &mut Services, path: &str, bytes: &[u8]) -> Result<(), String> {
+    if DOCUMENT_SAVE.with(std::cell::Cell::get)
+        && let Some(keep) = services.keep.as_mut()
+    {
+        return keep(&fileio::file_name(path), bytes);
+    }
     if let Some(dl) = services.download.as_mut() {
         return dl(&fileio::file_name(path), bytes);
     }
@@ -739,7 +767,10 @@ fn write_plan(app: &mut VectorcraftApp, plan: SavePlan) -> Result<Value, String>
         report_saved(app, &path, &r);
         Ok(r)
     };
-    let mut r = background::run(app, enabled, label, Some(uid), work, then)?;
+    let saving = DocumentSave::begin();
+    let r = background::run(app, enabled, label, Some(uid), work, then);
+    drop(saving);
+    let mut r = r?;
     if let Some(path) = target.filter(|_| r.get("path").is_none()) {
         r["path"] = json!(path);
     }
